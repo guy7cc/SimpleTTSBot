@@ -1,5 +1,8 @@
 # SimpleTTSBot
-COEIROINKと併用して動くDiscord Botのスクリプトです。
+[COEIROINK](https://coeiroink.com/)と併用して動くDiscord Botのスクリプトです。このプロジェクトはMIT Licenseの下で公開されています。
+
+## 参考にしたサイト様
+[自分の声でDISCORDの読み上げBOTを作成[COEIROINK]](https://note.com/aka7004/n/n235d251f9da3) - 部分的なコードサンプルとアイデア
 
 ## 使い方
 まず、リポジトリをクローンします。  

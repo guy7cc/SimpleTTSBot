@@ -1,3 +1,6 @@
+# MIT License
+# Copyright (c) 2024 Gai Ichisawa
+
 import os, logging, json, requests, discord
 from typing import Callable, Any
 from discord.ext import commands

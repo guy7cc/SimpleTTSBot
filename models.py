@@ -1,3 +1,6 @@
+# MIT License
+# Copyright (c) 2024 Gai Ichisawa
+
 from enum import Enum
 
 class Models(Enum):

@@ -1,3 +1,6 @@
+# MIT License
+# Copyright (c) 2024 Gai Ichisawa
+
 import sys, logging, coloredlogs, discord
 from discord.ext import commands
 from cog import MyCog, TTSCog
