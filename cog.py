@@ -1,9 +1,9 @@
 # MIT License
 # Copyright (c) 2024 Gai Ichisawa
 
-import os, logging, json, requests, discord
+import os, logging, json, requests, discord, queue
 from typing import Callable, Any
-from discord.ext import commands
+from discord.ext import tasks, commands
 from discord import app_commands
 from models import Models
 
@@ -25,6 +25,7 @@ class TTSCog(MyCog):
         self.voice_clients = {}
         self.voice_channels = {}
         self.prefs = {}
+        self.queue = queue.Queue()
 
     async def cog_load(self):
         logger = self.logger.getChild('on_ready')
@@ -32,6 +33,7 @@ class TTSCog(MyCog):
             with open('prefs.json', 'r') as f:
                 self.prefs = json.load(f)
             logger.info('Loaded preferences')
+        self.loop.start()
         logger.info('Initialized TTSCog')
 
     def on_close(self):
@@ -39,6 +41,7 @@ class TTSCog(MyCog):
         with open('prefs.json', 'w') as f:
             f.write(json.dumps(self.prefs))
         logger.info('Saved preferences')
+        self.loop.cancel()
         logger.info('TTSCog Closed')
 
     def get_pref(self, user_id: int, key: str, def_val: ..., cond: Callable[..., bool]):
@@ -166,68 +169,81 @@ class TTSCog(MyCog):
             if self.text_channels[message.guild.id] != message.channel:
                 return
 
-            vc = self.voice_clients[message.guild.id]
-            style = self.get_style(message.author.id)
-
-            response = requests.post(
-                url='http://localhost:50031/audio_query',
-                params={
-                    'text': message.content,
-                    'speaker': style[0],
-                }
-            )
-            query = response.json()
-            query['speedScale'] = self.get_speed(message.author.id)
-            query['pitchScale'] = self.get_pitch(message.author.id)
-            query['intonationScale'] = self.get_intonation(message.author.id)
-            query['volumeScale'] = self.get_volume(message.author.id)
-            query['prePhonemeLength'] = 0.0
-            query['postPhonemeLength'] = 0.0
-            query['pauseLength'] = None
-            query['pauseLengthScale'] = 1.0
-            query['outputSamplingRate'] = 44100
-            query['outputStereo'] = False
-
-            if len(style) == 1:
-                response = requests.post(
-                    url='http://localhost:50031/synthesis',
-                    params={
-                        'speaker': style[0]
-                    },
-                    headers={'Content-Type': 'application/json'},
-                    data=json.dumps(query),
-                )
-            elif len(style) == 3:
-                response = requests.post(
-                    url='http://localhost:50031/synthesis_morphing',
-                    params={
-                        'base_speaker': style[0],
-                        'target_speaker': style[1],
-                        'morph_rate': style[2]
-                    },
-                    headers={'Content-Type': 'application/json'},
-                    data=json.dumps(query)
-                )
-
-            temp_file = f'temp_{message.id}.wav'
-
-            with open(temp_file, 'wb') as f:
-                f.write(response.content)
-
-            vc.play(
-                discord.FFmpegPCMAudio(
-                    temp_file,
-                    before_options='-channel_layout mono'
-                ),
-                application='lowdelay',
-                bitrate=128,
-                fec=True,
-                bandwidth='full',
-                signal_type='voice',
-                after=lambda e: os.remove(temp_file)
-            )
+            self.queue.put(message)
 
             await self.bot.process_commands(message)
+
+    @tasks.loop(seconds=1)
+    async def loop(self):
+        if self.queue.empty(): return
+
+        message = self.queue.get()
+
+        vc = self.voice_clients[message.guild.id]
+        style = self.get_style(message.author.id)
+
+        if len(message.content) > 40:
+            text = message.content[0:40] + "以下略"
+        else:
+            text = message.content
+
+        response = requests.post(
+            url='http://localhost:50031/audio_query',
+            params={
+                'text': text,
+                'speaker': style[0],
+            }
+        )
+        query = response.json()
+        query['speedScale'] = self.get_speed(message.author.id)
+        query['pitchScale'] = self.get_pitch(message.author.id)
+        query['intonationScale'] = self.get_intonation(message.author.id)
+        query['volumeScale'] = self.get_volume(message.author.id)
+        query['prePhonemeLength'] = 0.0
+        query['postPhonemeLength'] = 0.0
+        query['pauseLength'] = None
+        query['pauseLengthScale'] = 1.0
+        query['outputSamplingRate'] = 44100
+        query['outputStereo'] = False
+
+        if len(style) == 1:
+            response = requests.post(
+                url='http://localhost:50031/synthesis',
+                params={
+                    'speaker': style[0]
+                },
+                headers={'Content-Type': 'application/json'},
+                data=json.dumps(query),
+            )
+        elif len(style) == 3:
+            response = requests.post(
+                url='http://localhost:50031/synthesis_morphing',
+                params={
+                    'base_speaker': style[0],
+                    'target_speaker': style[1],
+                    'morph_rate': style[2]
+                },
+                headers={'Content-Type': 'application/json'},
+                data=json.dumps(query)
+            )
+
+        temp_file = f'temp_{message.id}.wav'
+
+        with open(temp_file, 'wb') as f:
+            f.write(response.content)
+
+        vc.play(
+            discord.FFmpegPCMAudio(
+                temp_file,
+                before_options='-channel_layout mono'
+            ),
+            application='lowdelay',
+            bitrate=128,
+            fec=True,
+            bandwidth='full',
+            signal_type='voice',
+            after=lambda e: os.remove(temp_file)
+        )
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
