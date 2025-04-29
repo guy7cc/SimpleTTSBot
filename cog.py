@@ -26,6 +26,7 @@ class TTSCog(MyCog):
         self.voice_channels = {}
         self.prefs = {}
         self.queue = queue.Queue()
+        self.is_reading = False
 
     async def cog_load(self):
         logger = self.logger.getChild('on_ready')
@@ -175,7 +176,9 @@ class TTSCog(MyCog):
 
     @tasks.loop(seconds=1)
     async def loop(self):
-        if self.queue.empty(): return
+        if self.queue.empty() or self.is_reading: return
+
+        is_reading = True
 
         message = self.queue.get()
 
@@ -244,6 +247,8 @@ class TTSCog(MyCog):
             signal_type='voice',
             after=lambda e: os.remove(temp_file)
         )
+
+        is_reading = False
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
