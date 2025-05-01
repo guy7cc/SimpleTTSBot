@@ -1,7 +1,7 @@
 # MIT License
 # Copyright (c) 2024 Gai Ichisawa
 
-import os, logging, json, requests, discord, queue
+import os, logging, json, requests, discord, queue, asyncio
 from typing import Callable, Any
 from discord.ext import tasks, commands
 from discord import app_commands
@@ -178,77 +178,83 @@ class TTSCog(MyCog):
     async def loop(self):
         if self.queue.empty() or self.is_reading: return
 
-        is_reading = True
+        lock = asyncio.Lock()
 
-        message = self.queue.get()
+        try:
+            async with lock:
+                is_reading = True
 
-        vc = self.voice_clients[message.guild.id]
-        style = self.get_style(message.author.id)
+                message = self.queue.get()
 
-        if len(message.content) > 40:
-            text = message.content[0:40] + "以下略"
-        else:
-            text = message.content
+                vc = self.voice_clients[message.guild.id]
+                style = self.get_style(message.author.id)
 
-        response = requests.post(
-            url='http://localhost:50031/audio_query',
-            params={
-                'text': text,
-                'speaker': style[0],
-            }
-        )
-        query = response.json()
-        query['speedScale'] = self.get_speed(message.author.id)
-        query['pitchScale'] = self.get_pitch(message.author.id)
-        query['intonationScale'] = self.get_intonation(message.author.id)
-        query['volumeScale'] = self.get_volume(message.author.id)
-        query['prePhonemeLength'] = 0.0
-        query['postPhonemeLength'] = 0.0
-        query['pauseLength'] = None
-        query['pauseLengthScale'] = 1.0
-        query['outputSamplingRate'] = 44100
-        query['outputStereo'] = False
+                if len(message.content) > 40:
+                    text = message.content[0:40] + "以下略"
+                else:
+                    text = message.content
 
-        if len(style) == 1:
-            response = requests.post(
-                url='http://localhost:50031/synthesis',
-                params={
-                    'speaker': style[0]
-                },
-                headers={'Content-Type': 'application/json'},
-                data=json.dumps(query),
-            )
-        elif len(style) == 3:
-            response = requests.post(
-                url='http://localhost:50031/synthesis_morphing',
-                params={
-                    'base_speaker': style[0],
-                    'target_speaker': style[1],
-                    'morph_rate': style[2]
-                },
-                headers={'Content-Type': 'application/json'},
-                data=json.dumps(query)
-            )
+                response = requests.post(
+                    url='http://localhost:50031/audio_query',
+                    params={
+                        'text': text,
+                        'speaker': style[0],
+                    }
+                )
+                query = response.json()
+                query['speedScale'] = self.get_speed(message.author.id)
+                query['pitchScale'] = self.get_pitch(message.author.id)
+                query['intonationScale'] = self.get_intonation(message.author.id)
+                query['volumeScale'] = self.get_volume(message.author.id)
+                query['prePhonemeLength'] = 0.0
+                query['postPhonemeLength'] = 0.0
+                query['pauseLength'] = None
+                query['pauseLengthScale'] = 1.0
+                query['outputSamplingRate'] = 44100
+                query['outputStereo'] = False
 
-        temp_file = f'temp_{message.id}.wav'
+                if len(style) == 1:
+                    response = requests.post(
+                        url='http://localhost:50031/synthesis',
+                        params={
+                            'speaker': style[0]
+                        },
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(query),
+                    )
+                elif len(style) == 3:
+                    response = requests.post(
+                        url='http://localhost:50031/synthesis_morphing',
+                        params={
+                            'base_speaker': style[0],
+                            'target_speaker': style[1],
+                            'morph_rate': style[2]
+                        },
+                        headers={'Content-Type': 'application/json'},
+                        data=json.dumps(query)
+                    )
 
-        with open(temp_file, 'wb') as f:
-            f.write(response.content)
+                temp_file = f'temp_{message.id}.wav'
 
-        vc.play(
-            discord.FFmpegPCMAudio(
-                temp_file,
-                before_options='-channel_layout mono'
-            ),
-            application='lowdelay',
-            bitrate=128,
-            fec=True,
-            bandwidth='full',
-            signal_type='voice',
-            after=lambda e: os.remove(temp_file)
-        )
+                with open(temp_file, 'wb') as f:
+                    f.write(response.content)
 
-        is_reading = False
+                vc.play(
+                    discord.FFmpegPCMAudio(
+                        temp_file,
+                        before_options='-channel_layout mono'
+                    ),
+                    application='lowdelay',
+                    bitrate=128,
+                    fec=True,
+                    bandwidth='full',
+                    signal_type='voice',
+                    after=lambda e: os.remove(temp_file)
+                )
+
+                is_reading = False
+        except Exception as err:
+            self.logger.error(msg="Unhandled exception has occurred", exc_info=err)
 
     @commands.Cog.listener()
     async def on_voice_state_update(self, member, before, after):
